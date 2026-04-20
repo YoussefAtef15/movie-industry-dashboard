@@ -3,6 +3,7 @@ from dash import dcc, html, Input, Output
 import plotly.express as px
 import plotly.graph_objects as go
 import pandas as pd
+import numpy as np
 
 # ==========================================
 # 1. DATA LOADING & PREPARATION
@@ -13,6 +14,9 @@ df = pd.read_csv('data/cleaned_movies.csv')
 
 # Get the top 5 most frequent genres to make the dropdown and visuals cleaner
 top_genres = df['main_genre'].value_counts().nlargest(5).index.tolist()
+
+# Get available languages from the new language_group column
+available_languages = df['language_group'].unique().tolist()
 
 # Filter the dataframe to only include these top 5 genres initially
 df = df[df['main_genre'].isin(top_genres)]
@@ -57,17 +61,14 @@ app.layout = html.Div(className='container', children=[
             )
         ]),
 
-        # Filter 3: Original Language Radio Buttons
+        # Filter 3: Language Group Dropdown (Updated for Professional Cleaning)
         html.Div(className='filter-control', style={'width': '20%'}, children=[
-            html.Label("Language:"),
-            dcc.RadioItems(
+            html.Label("Language Group:"),
+            dcc.Dropdown(
                 id='lang-filter',
-                options=[
-                    {'label': 'English', 'value': 'en'},
-                    {'label': 'All', 'value': 'all'}
-                ],
-                value='all',  # Default is to show all languages
-                inline=True
+                options=[{'label': l, 'value': l} for l in available_languages],
+                value='en',  # Default is English
+                clearable=False
             )
         ])
     ]),
@@ -111,12 +112,13 @@ app.layout = html.Div(className='container', children=[
             html.P("Insight: Side-by-side comparison of average budget vs. revenue by genre.", className='insight-text')
         ]),
 
-        # Week 3 & 4 Charts (Relationship)
+        # Week 3 & 4 Charts (Relationship - Using Log Scale)
         html.Div(className='chart-card', children=[
-            html.Span("Scatter Chart", className='chart-badge'),
+            html.Span("Scatter Chart (Log Scale)", className='chart-badge'),
             dcc.Graph(id='scatter-chart'),
-            html.P("Insight: Visualizes the correlation between movie budgets and final revenues.",
-                   className='insight-text')
+            html.P(
+                "Insight: Visualizes the correlation between movie budgets and final revenues using Log transformation.",
+                className='insight-text')
         ]),
         html.Div(className='chart-card', children=[
             html.Span("Bubble Chart", className='chart-badge'),
@@ -127,9 +129,10 @@ app.layout = html.Div(className='container', children=[
 
         # Week 5, 6 & 7 Charts (Distribution)
         html.Div(className='chart-card full-width', children=[
-            html.Span("Histogram Chart", className='chart-badge'),
+            html.Span("Histogram Chart (Log Scale)", className='chart-badge'),
             dcc.Graph(id='hist-chart'),
-            html.P("Insight: Displays the frequency distribution of movie revenues.", className='insight-text')
+            html.P("Insight: Displays the frequency distribution of movie revenues on a Log scale.",
+                   className='insight-text')
         ]),
         html.Div(className='chart-card', children=[
             html.Span("Box Chart", className='chart-badge'),
@@ -175,15 +178,17 @@ def update_dashboard(genre, year_range, lang):
     # 3.1 Apply Filters based on user input
     filtered = df[(df['release_year'] >= year_range[0]) & (df['release_year'] <= year_range[1])]
 
-    if lang == 'en':
-        filtered = filtered[filtered['original_language'] == 'en']
+    # Use the new language_group column for filtering
+    filtered = filtered[filtered['language_group'] == lang]
 
     # 3.2 Prepare specific DataFrames for different charts
     genre_data = filtered[filtered['main_genre'] == genre]
     top10_movies = genre_data.nlargest(10, 'revenue')
     yearly_data = filtered.groupby(['release_year', 'main_genre'])[['budget', 'revenue']].sum().reset_index()
-    yearly_agg = filtered.groupby('release_year')[['id', 'revenue']].agg(
-        {'id': 'count', 'revenue': 'sum'}).reset_index()
+    yearly_agg = filtered.groupby('release_year')[['revenue']].agg(
+        {'revenue': ['sum', 'count']}).reset_index()
+    yearly_agg.columns = ['release_year', 'revenue_sum', 'movie_count']
+
     genre_agg = filtered.groupby('main_genre')[['budget', 'revenue']].mean().reset_index()
 
     # 3.3 Create the 13 Plotly Figures
@@ -212,15 +217,16 @@ def update_dashboard(genre, year_range, lang):
         go.Bar(name='Revenue', y=genre_agg['main_genre'], x=genre_agg['revenue'], orientation='h')
     ]).update_layout(barmode='group', title="Avg Budget vs Revenue by Genre (Clustered)", template=modern_theme)
 
-    # Week 3 & 4: Relationship
-    fig_scatter = px.scatter(genre_data, x='budget', y='revenue', title="Budget vs Revenue", template=modern_theme,
-                             color_discrete_sequence=[primary_color])
+    # Week 3 & 4: Relationship (Updated with Log Columns from preprocessing)
+    fig_scatter = px.scatter(genre_data, x='log_budget', y='log_revenue', title="Budget vs Revenue (Log Scale)",
+                             template=modern_theme,
+                             color_discrete_sequence=[primary_color], hover_name='title')
     fig_bubble = px.scatter(genre_data, x='budget', y='revenue', size='popularity', hover_name='title',
-                            title="Budget vs Rev (Popularity size)", template=modern_theme,
+                            title="Industry Matrix (Size = Popularity)", template=modern_theme,
                             color_discrete_sequence=[primary_color])
 
-    # Week 5, 6, 7: Distribution
-    fig_hist = px.histogram(filtered, x='revenue', color='main_genre', title="Revenue Distribution",
+    # Week 5, 6, 7: Distribution (Updated with Log Column)
+    fig_hist = px.histogram(filtered, x='log_revenue', color='main_genre', title="Revenue Distribution (Log Scale)",
                             template=modern_theme)
     fig_box = px.box(filtered, x='main_genre', y='vote_average', color='main_genre', title="Ratings Distribution",
                      template=modern_theme)
@@ -228,9 +234,9 @@ def update_dashboard(genre, year_range, lang):
                            title="Runtime Distribution", template=modern_theme)
 
     # Week 8 & 9: Time-Series
-    fig_line = px.line(yearly_agg, x='release_year', y='id', markers=True, title="Movies Released per Year",
+    fig_line = px.line(yearly_agg, x='release_year', y='movie_count', markers=True, title="Movies Released per Year",
                        template=modern_theme, color_discrete_sequence=[primary_color])
-    fig_area = px.area(yearly_agg, x='release_year', y='revenue', title="Total Revenue Over Time",
+    fig_area = px.area(yearly_agg, x='release_year', y='revenue_sum', title="Total Revenue Over Time",
                        template=modern_theme, color_discrete_sequence=[primary_color])
 
     return (fig_bar, fig_col, fig_stacked_col, fig_stacked_bar,
