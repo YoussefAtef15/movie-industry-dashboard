@@ -1,6 +1,10 @@
 # 🎬 Movie Industry Analytics Dashboard
 
-![Dashboard Preview](assets/dashboard_preview.png)
+<!-- Full dashboard image removed from inline view because it is too large -->
+
+<!-- Users can open the full-resolution image using the link below -->
+
+[View Full Dashboard Image](assets/Dashboard_Full-Preview.png)
 
 ![Dashboard UI](https://img.shields.io/badge/UI-SaaS_Professional-blue?style=for-the-badge)
 ![Data Tool](https://img.shields.io/badge/Backend-Python_Pipeline-green?style=for-the-badge)
@@ -18,6 +22,62 @@ The system is built using **Python, Plotly, and Dash**, and leverages the **TMDB
 * Audience Satisfaction (Ratings, Votes)
 * Production Strategy (Budget, Genre, Runtime)
 * Seasonal Trends (Release timing impact)
+
+---
+
+## 🖥 Dashboard Preview Breakdown
+
+### Overview Section
+
+![Overview](assets/dashboard_top.png)
+
+This section includes:
+
+* KPI cards showing total movies, estimated margin, rating, and top genre
+* Seasonal profit chart highlighting best release periods
+* Top production companies ranked by total profit
+* Budget risk distribution across tiers
+* Genre satisfaction breakdown
+* Rating vs marketing hype comparison
+
+---
+
+### Interactive Custom Explorer
+
+![Explorer](assets/dashboard_explorer.png)
+
+This section allows full dynamic exploration of the dataset.
+
+Features:
+
+* Select any chart type (13 types supported)
+* Choose X-axis and Y-axis variables
+* Add grouping by category
+* Control bubble size for advanced charts
+* Apply Top N filter to reduce clutter
+
+Controls explained:
+
+* Chart Type
+  Switch between predefined visualization types or use Auto Mode
+
+* X-Axis / Y-Axis
+  Select any numerical or categorical feature
+
+* Color / Group
+  Split data into categories
+
+* Size (Bubble)
+  Control bubble size in scatter charts
+
+* Top N Filter
+  Limit categories to top values for clarity
+
+Auto Mode behavior:
+
+* Detects best chart automatically
+* Prevents invalid combinations
+* Reduces manual work
 
 ---
 
@@ -67,208 +127,48 @@ Result:
 * Source: Kaggle
 * File Used: `tmdb_5000_movies.csv`
 
-### Key Attributes
-
-* Budget & Revenue
-* Genres (JSON → Multi-label)
-* Popularity & Votes
-* Runtime
-* Release Date
-* Production Companies
-
----
-
-## ⚠️ Data Challenges
-
-* Missing values
-* Zero budgets and revenues
-* JSON parsing
-* Skewed distributions
-
----
-
-## 📌 Data Assumptions
-
-### Hollywood Rule Applied
-
-Profit is estimated using:
-
-Revenue - (2 × Budget)
-
-Reason:
-
-* Marketing costs often equal production budget
-* Gives realistic profitability estimate
-
-### Missing Values Strategy
-
-* Imputed using genre medians
-* Keeps distribution stable
-
----
-
-## 📊 Dashboard Breakdown
-
-### KPI Cards
-
-* Total Movies → count after filters
-* Estimated Margin → realistic profit
-* Average Rating → Bayesian rating
-* Top Genre → most frequent
-
----
-
-### Charts Overview
-
-1. Seasonal profit trends
-2. Top studios by profit
-3. Budget risk distribution
-4. Genre satisfaction
-5. Rating vs hype
-6. Budget vs profit by decade
-7. Runtime vs rating
-8. Engagement vs profit
-9. Runtime distribution
-10. ROI volatility
-11. Budget risk distribution
-12. Budget vs revenue trends
-13. Genre contribution over time
-
----
-
-## 🚀 Key Features
-
-### Backend Pipeline
-
-* Multi-label encoding
-* Smart imputation
-* Bayesian rating
-* ROI calculation
-* Log transformation
-
----
-
-### Frontend Dashboard
-
-* 13+ interactive charts
-* KPI cards
-* Dynamic explorer
-* Clean UI
-* Responsive layout
-
----
-
-## ⚡ Performance Optimization
-
-* Heavy computation done in preprocessing
-* Dashboard reads only clean data
-* No runtime feature engineering
-* Faster rendering
-
----
-
-## 🛠 Tech Stack
-
-* Python
-* Pandas
-* NumPy
-* Plotly
-* Dash
-* HTML / CSS
-
----
-
-## 📂 Project Structure
-
-```text
-movie_dashboard_project/
-├── assets/
-│   ├── style.css
-│   └── dashboard_preview.png
-├── data/
-│   ├── raw_movies.csv
-│   └── cleaned_movies.csv
-├── notebooks/
-│   └── preprocessing.ipynb
-├── src/
-│   ├── data_cleaning.py
-│   ├── feature_engineering.py
-│   └── utils.py
-├── app.py
-├── README.md
-└── requirements.txt
-```
-
 ---
 
 ## ▶️ Instructions to Run
 
 ```bash
+# Clone the repository from GitHub
 git clone https://github.com/YoussefAtef15/movie-industry-dashboard.git
+
+# Navigate into the project folder
 cd movie-industry-dashboard
 ```
 
 ```bash
+# Create a virtual environment (isolates dependencies)
 python -m venv venv
 ```
 
 ```bash
+# Activate the virtual environment (Windows)
 venv\Scripts\activate
 ```
 
 ```bash
+# Install all required packages
 pip install -r requirements.txt
 ```
 
 ```bash
+# Run the dashboard application
 python app.py
 ```
 
-Open:
+# Open this link in your browser after running the server
 
 http://127.0.0.1:8050/
 
 ---
 
-## 📊 Core Insights
-
-* Budget does not guarantee success
-* Medium budget films are risky
-* Summer drives profit
-* Drama leads in quality
-* Engagement drives revenue
-* Optimal runtime is 90–120 minutes
-
----
-
-## 🔮 Future Work
-
-* Recommendation system
-* ML profit prediction
-* Real-time API
-* Deep learning models
-
----
-
-## 🤝 Contribution
-
-Steps:
-
-* Fork repo
-* Create branch
-* Make changes
-* Submit pull request
-
----
-
-## 📄 License
-
-This project is for educational purposes.
-
----
-
 ## 📌 Notes
 
+* Full dashboard image is available via link only
+* Large preview is intentionally hidden for readability
 * Dashboard uses preprocessed data only
 * Backend ensures consistency
 * Designed for scalability
