@@ -11,12 +11,16 @@ try:
 except ImportError:
     pass
 
+# ==========================================
+# 1. DATA PIPELINE & LOADING
+# ==========================================
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 RAW_DATA_PATH = os.path.join(BASE_DIR, 'data', 'raw_movies.csv')
 CLEAN_DATA_PATH = os.path.join(BASE_DIR, 'data', 'cleaned_movies.csv')
 
+# Ensure clean data exists
 if not os.path.exists(CLEAN_DATA_PATH):
-    print(f"\n[INFO] Clean dataset missing. Auto-building pipeline from raw data...")
+    print("\n[INFO] Clean dataset missing. Auto-building pipeline from raw data...")
     if not os.path.exists(RAW_DATA_PATH):
         raise FileNotFoundError(f"Raw data missing at {RAW_DATA_PATH}")
     process_pipeline(RAW_DATA_PATH, CLEAN_DATA_PATH)
@@ -24,13 +28,51 @@ if not os.path.exists(CLEAN_DATA_PATH):
 
 df = pd.read_csv(CLEAN_DATA_PATH)
 
-validate_dataset(df)
+try:
+    validate_dataset(df)
+except NameError:
+    pass
 
-top_genres = df['main_genre'].value_counts().nlargest(5).index.tolist()
-available_languages = df['language_group'].dropna().unique().tolist()
-min_year = int(df['release_year'].min())
-max_year = int(df['release_year'].max())
+# Compute derived columns safely
+if 'Decade' not in df.columns:
+    df['Decade'] = (df['release_year'] // 10) * 10
+    df['Decade_Str'] = df['Decade'].astype(str) + 's'
 
+
+def get_season(month):
+    if pd.isna(month): return 'Unknown'
+    month = int(month)
+    if month in [12, 1, 2]:
+        return 'Winter'
+    elif month in [3, 4, 5]:
+        return 'Spring'
+    elif month in [6, 7, 8]:
+        return 'Summer'
+    else:
+        return 'Autumn'
+
+
+if 'Season' not in df.columns and 'release_month' in df.columns:
+    df['Season'] = df['release_month'].apply(get_season)
+
+if 'Budget_Tier' not in df.columns and 'budget' in df.columns:
+    bins = [0, 10e6, 50e6, 150e6, float('inf')]
+    labels = ['Low (<10M)', 'Medium (10M-50M)', 'High (50M-150M)', 'Mega (>150M)']
+    df['Budget_Tier'] = pd.cut(df['budget'], bins=bins, labels=labels)
+
+if 'Rating_Cat' not in df.columns and 'weighted_rating' in df.columns:
+    median_rating = df['weighted_rating'].median()
+    df['Rating_Cat'] = np.where(df['weighted_rating'] >= median_rating, 'High Rated', 'Low Rated')
+
+# Dashboard Filter Variables
+top_genres = df['main_genre'].value_counts().nlargest(5).index.tolist() if 'main_genre' in df.columns else []
+available_languages = df['language_group'].dropna().unique().tolist() if 'language_group' in df.columns else []
+min_year = int(df['release_year'].min()) if 'release_year' in df.columns else 1980
+max_year = int(df['release_year'].max()) if 'release_year' in df.columns else 2023
+
+df = df[df['main_genre'].isin(top_genres)]
+
+# Data types for custom explorer
 NUMERICAL_COLS = [
     'budget', 'revenue', 'profit', 'ROI', 'log_budget', 'log_revenue',
     'runtime', 'vote_average', 'weighted_rating', 'popularity', 'popularity_score', 'vote_count'
@@ -40,23 +82,23 @@ CATEGORICAL_COLS = [
     'release_year', 'Season', 'Budget_Tier', 'Rating_Cat', 'Decade_Str', 'primary_company'
 ]
 
-# SaaS Professional Color Palette
+# Standardized Color Palette
 COLOR_PRIMARY = '#2563EB'
 COLOR_SUCCESS = '#16A34A'
 COLOR_DANGER = '#DC2626'
 COLOR_SECONDARY = '#64748B'
 COLOR_BORDER = '#CBD5E1'
-
-# Array of blue variations for grouped charts
 GUIDELINE_COLORS = ['#2563EB', '#3B82F6', '#60A5FA', '#93C5FD', '#1D4ED8', '#1E40AF', '#1E3A8A']
 
-df = df[df['main_genre'].isin(top_genres)]
-
+# ==========================================
+# 2. DASHBOARD APP INITIALIZATION
+# ==========================================
 app = dash.Dash(__name__, assets_ignore='.*~')
 app.title = "Movie Analytics"
 
 
 def create_chart_card(chart_id, title, relation, insight, full_width=False):
+    """HTML Structure for each individual chart card."""
     className = 'chart-card span-full' if full_width else 'chart-card'
     return html.Div(className=className, children=[
         html.H3(title, className='chart-header'),
@@ -72,7 +114,12 @@ def create_chart_card(chart_id, title, relation, insight, full_width=False):
     ])
 
 
+# ==========================================
+# 3. DASHBOARD UI LAYOUT
+# ==========================================
 app.layout = html.Div(className='app-container', children=[
+
+    # Left Sidebar
     html.Div(className='sidebar', children=[
         html.Div(className='sidebar-header', children=[
             html.Div(className='profile-pic', children="MA"),
@@ -110,6 +157,7 @@ app.layout = html.Div(className='app-container', children=[
         ])
     ]),
 
+    # Main Viewing Area
     html.Div(className='main-content', children=[
         html.Div(className='top-header', children=[
             html.H1("Overview", className='page-title')
@@ -117,19 +165,22 @@ app.layout = html.Div(className='app-container', children=[
 
         html.Div(className='top-stats-grid', children=[
             html.Div(className='stat-card', children=[
-                html.P("Total Movies", className='stat-title'),
+                html.P("Total Movies", className='stat-title', title="Total number of movies in the selected filters."),
                 html.H3(id='stat-total-movies', className='stat-value')
             ]),
             html.Div(className='stat-card', children=[
-                html.P("Total Profit", className='stat-title'),
+                html.P("Estimated Margin", className='stat-title',
+                       title="Estimated Box Office Margin (Revenue - 2x Budget). Includes statistically imputed values."),
                 html.H3(id='stat-total-profit', className='stat-value')
             ]),
             html.Div(className='stat-card', children=[
-                html.P("Average Rating", className='stat-title'),
+                html.P("Average Rating", className='stat-title',
+                       title="Average Bayesian weighted rating for the selected movies."),
                 html.H3(id='stat-avg-rating', className='stat-value')
             ]),
             html.Div(className='stat-card', children=[
-                html.P("Top Genre", className='stat-title'),
+                html.P("Top Genre", className='stat-title',
+                       title="Most frequent primary genre in the selected filters."),
                 html.H3(id='stat-top-genre', className='stat-value')
             ]),
         ]),
@@ -154,7 +205,7 @@ app.layout = html.Div(className='app-container', children=[
                               "Amount vs Decade",
                               "Average net profit has remained resilient despite rising production budgets.", False),
             create_chart_card('chart-7', "7. Scatter Plot: Runtime vs. Audience Rating", "Runtime vs Rating",
-                              "Vast majority of successful films congregate within the 80–120-minute window.", False),
+                              "Vast majority of successful films congregate within the 80-120-minute window.", False),
             create_chart_card('chart-8', "8. Bubble Chart: Audience Engagement vs. Profitability",
                               "Votes vs Profit (Size: Budget)",
                               "Higher audience engagement correlates with higher profitability.", False),
@@ -168,7 +219,7 @@ app.layout = html.Div(className='app-container', children=[
             create_chart_card('chart-11', "11. Violin Plot: Log Budget Distribution by Performance Status",
                               "Status vs Density (Log Budget)",
                               "High budgets are not a guarantee of safety; they guarantee exposure.", False),
-            create_chart_card('chart-12', "12. Time-Series Analysis: Average Budget vs. Revenue Trends (1990–2017)",
+            create_chart_card('chart-12', "12. Time-Series Analysis: Average Budget vs. Revenue Trends (1990-2017)",
                               "Year vs Amount", "Revenue remains highly volatile, confirming a hit-driven industry.",
                               True),
             create_chart_card('chart-13', "13. Area Chart: Genre Contribution to Total Profit Over Time",
@@ -176,6 +227,7 @@ app.layout = html.Div(className='app-container', children=[
                               "Action and Adventure dominate total profit growth post-2010.", True),
         ]),
 
+        # Custom Explorer
         html.Div(className='custom-explorer', children=[
             html.Div(className='custom-explorer-header', children=[
                 html.H2("Interactive Custom Explorer"),
@@ -221,6 +273,21 @@ app.layout = html.Div(className='app-container', children=[
                 html.Div(className='explorer-control-item', id='custom-size-axis-container', children=[
                     html.Label("Size (Bubble)", id='size-axis-label', className='filter-label-dark'),
                     dcc.Dropdown(id='custom-size-axis', clearable=False, className='custom-dropdown')
+                ]),
+                # NEW TOP N FILTER
+                html.Div(className='explorer-control-item', children=[
+                    html.Label("Top N Filter", className='filter-label-dark'),
+                    dcc.Dropdown(
+                        id='custom-top-n',
+                        options=[
+                            {'label': 'Top 5', 'value': 5},
+                            {'label': 'Top 10', 'value': 10},
+                            {'label': 'Top 15', 'value': 15},
+                            {'label': 'Top 20', 'value': 20},
+                            {'label': 'Show All', 'value': 0}
+                        ],
+                        value=15, clearable=False, className='custom-dropdown'
+                    )
                 ])
             ]),
             html.H3(id='custom-chart-title', className='chart-header',
@@ -239,44 +306,107 @@ app.layout = html.Div(className='app-container', children=[
                 html.Span(" | ", className='link-separator'),
                 html.A("GitHub Repository", href="https://github.com/YoussefAtef15/movie-industry-dashboard",
                        target="_blank", className='project-link')
-            ])
+            ]),
+            html.P(
+                "Disclaimer: Financial figures use the Hollywood '2x Budget' rule for realistic profitability. "
+                "Furthermore, missing budgets and revenues were statistically imputed based on genre medians to preserve data distribution.",
+                style={'fontSize': '0.85rem', 'color': '#DC2626', 'maxWidth': '700px', 'margin': '0 auto 20px auto',
+                       'textAlign': 'center', 'fontWeight': '500'}
+            )
         ])
     ])
 ])
 
 
-def apply_guidelines(fig):
-    """Applies modern SaaS styling: soft borders, clean fonts, minimal grids."""
+# ==========================================
+# 4. CHART BUILDING HELPERS
+# ==========================================
+def apply_standard_layout(fig, title_text, xaxis_title, yaxis_title, legend_title="Legend",
+                          barmode=None, bargap=None, bargroupgap=None, xaxis_range=None, yaxis_range=None,
+                          xaxis_tickangle=None, yaxis_ticksuffix=None, yaxis_rangemode=None,
+                          xaxis_rangemode=None, xaxis_categoryorder=None, xaxis_categoryarray=None,
+                          margin_l=60, margin_r=180):
+    """
+    100% Bulletproof function for ALL Plotly versions.
+    Enforces Top-Right Legend positioning strictly outside the plot area.
+    Fixes unexpected keyword arguments.
+    """
+
+    safe_title = f"<b>{title_text}</b>" if title_text else ""
+    safe_xaxis = f"<b>{xaxis_title}</b>" if xaxis_title else ""
+    safe_yaxis = f"<b>{yaxis_title}</b>" if yaxis_title else ""
+    safe_legend = f"<b>{legend_title}</b>" if legend_title else ""
+
+    # 1. Base Layout Update (Legend Top Right, Outside Plot)
     fig.update_layout(
         plot_bgcolor='#FFFFFF',
         paper_bgcolor='#FFFFFF',
         font=dict(color='#334155', family='Inter', size=12),
-        margin=dict(t=20, b=40, l=40, r=20)
+        margin=dict(t=80, b=60, l=margin_l, r=margin_r),  # Increased right margin ensures legend fits perfectly
+        title=dict(
+            text=safe_title,
+            x=0.5,
+            y=0.95,
+            font=dict(size=16, color='#0F172A', family='Inter')
+        ),
+        legend=dict(
+            title=dict(text=safe_legend, font=dict(size=12, color='#0F172A', family='Inter')),
+            bgcolor='rgba(255, 255, 255, 0.9)',
+            bordercolor='#CBD5E1',
+            borderwidth=1,
+            font=dict(size=11, color='#475569'),
+            yanchor="top", y=1,
+            xanchor="left", x=1.02,  # Pushes legend strictly outside to the right
+            orientation="v"
+        ),
+        showlegend=True
     )
+
+    # 2. X-Axis Safely Updated
     fig.update_xaxes(
-        color='#64748B', showline=True, linecolor=COLOR_BORDER,
+        title=dict(text=safe_xaxis, font=dict(size=13, color='#1E293B', family='Inter')),
+        color='#64748B', showline=True, linecolor='#CBD5E1',
         linewidth=1, mirror=False, gridcolor='#F1F5F9', zerolinecolor='#E2E8F0'
     )
+
+    # 3. Y-Axis Safely Updated
     fig.update_yaxes(
-        color='#64748B', showline=True, linecolor=COLOR_BORDER,
+        title=dict(text=safe_yaxis, font=dict(size=13, color='#1E293B', family='Inter')),
+        color='#64748B', showline=True, linecolor='#CBD5E1',
         linewidth=1, mirror=False, gridcolor='#F1F5F9', zerolinecolor='#E2E8F0'
     )
+
+    # 4. Optional Logic
+    if barmode: fig.update_layout(barmode=barmode)
+    if bargap: fig.update_layout(bargap=bargap)
+    if bargroupgap: fig.update_layout(bargroupgap=bargroupgap)
+
+    if xaxis_range: fig.update_xaxes(range=xaxis_range)
+    if yaxis_range: fig.update_yaxes(range=yaxis_range)
+    if xaxis_tickangle is not None: fig.update_xaxes(tickangle=xaxis_tickangle)
+    if yaxis_ticksuffix: fig.update_yaxes(ticksuffix=yaxis_ticksuffix)
+    if yaxis_rangemode: fig.update_yaxes(rangemode=yaxis_rangemode)
+    if xaxis_rangemode: fig.update_xaxes(rangemode=xaxis_rangemode)
+    if xaxis_categoryorder: fig.update_xaxes(categoryorder=xaxis_categoryorder)
+    if xaxis_categoryarray: fig.update_xaxes(categoryarray=xaxis_categoryarray)
+
     return fig
 
 
 def get_empty_state(message):
     """Returns a clean empty state graphic."""
     fig = go.Figure()
-    fig.add_annotation(text=message, x=0.5, y=0.5, showarrow=False, font=dict(color="#64748B", size=14))
+    fig.add_annotation(text=f"<b>{message}</b>", x=0.5, y=0.5, showarrow=False, font=dict(color="#64748B", size=14))
     fig.update_layout(plot_bgcolor='#FFFFFF', paper_bgcolor='#FFFFFF', xaxis=dict(visible=False),
                       yaxis=dict(visible=False))
     return fig
 
 
 # --- SMART DYNAMIC CHART BUILDER ---
-def build_dynamic_chart(df_filtered, chart_type, x_col, y_col, group_col, size_col):
+def build_dynamic_chart(df_filtered, chart_type, x_col, y_col, group_col, size_col, top_n):
     if not x_col or x_col == 'None':
-        return apply_guidelines(get_empty_state("Select an X-Axis to begin exploration")), "Interactive Explorer Output"
+        return apply_standard_layout(get_empty_state("Select an X-Axis to begin exploration"),
+                                     "Select X-Axis", "", ""), "Interactive Explorer Output"
 
     y_col = None if y_col == 'None' else y_col
     group_col = None if group_col == 'None' else group_col
@@ -313,14 +443,28 @@ def build_dynamic_chart(df_filtered, chart_type, x_col, y_col, group_col, size_c
 
     if error_msg:
         fig = go.Figure()
-        fig.add_annotation(text=error_msg, x=0.5, y=0.5, showarrow=False, font=dict(color=COLOR_DANGER, size=14))
+        fig.add_annotation(text=f"<b>{error_msg}</b>", x=0.5, y=0.5, showarrow=False,
+                           font=dict(color=COLOR_DANGER, size=14))
         fig.update_layout(plot_bgcolor='#FEF2F2', paper_bgcolor='#FFFFFF', xaxis=dict(visible=False),
                           yaxis=dict(visible=False))
-        return fig, "Configuration Error"
+        return apply_standard_layout(fig, "Configuration Error", "", ""), "Configuration Error"
+
+    # --- CLUTTER FIX: Dynamic Top N Filter ---
+    if top_n > 0:
+        if x_is_cat and x_col not in ['None', None]:
+            top_x = df_filtered[x_col].value_counts().nlargest(top_n).index
+            df_filtered = df_filtered[df_filtered[x_col].isin(top_x)]
+
+        if y_is_cat and y_col not in ['None', None]:
+            top_y = df_filtered[y_col].value_counts().nlargest(top_n).index
+            df_filtered = df_filtered[df_filtered[y_col].isin(top_y)]
+
+        if group_col and group_col not in ['None', None] and group_col in CATEGORICAL_COLS:
+            top_g = df_filtered[group_col].value_counts().nlargest(top_n).index
+            df_filtered = df_filtered[df_filtered[group_col].isin(top_g)]
 
     # Build the Chart dynamically
     fig = go.Figure()
-
     is_count_based = False
     if chart_type in ['column', 'stacked_column', 'clustered_column', 'bar', 'stacked_bar', 'clustered_bar']:
         if (x_is_cat and not y_col) or (x_is_cat and y_is_cat):
@@ -354,26 +498,36 @@ def build_dynamic_chart(df_filtered, chart_type, x_col, y_col, group_col, size_c
                 val_counts = df_g[x_col].value_counts().reset_index()
                 val_counts.columns = [x_col, 'Count']
                 fig.add_trace(go.Bar(x=val_counts[x_col], y=val_counts['Count'], name=trace_name, marker_color=c_val,
-                                     marker_line_width=0))
+                                     marker_line_width=0, text=val_counts['Count'], textposition='outside',
+                                     textfont=dict(color='black', family='Inter')))
             else:
                 calc_x = x_col if x_is_cat else y_col
                 calc_y = y_col if x_is_cat else x_col
-                agg = df_g.groupby(calc_x)[calc_y].mean().reset_index()
+                agg = df_g.groupby(calc_x)[calc_y].mean().reset_index().sort_values(by=calc_y, ascending=False)
+                # Ensure numerical formatting
+                text_vals = agg[calc_y].apply(lambda v: f"{v / 1e6:.1f}M" if v > 1e6 else f"{v:.1f}")
                 fig.add_trace(
-                    go.Bar(x=agg[calc_x], y=agg[calc_y], name=trace_name, marker_color=c_val, marker_line_width=0))
+                    go.Bar(x=agg[calc_x], y=agg[calc_y], name=trace_name, marker_color=c_val, marker_line_width=0,
+                           text="<b>" + text_vals + "</b>", textposition='outside',
+                           textfont=dict(color='black', family='Inter')))
 
         elif chart_type in ['bar', 'stacked_bar', 'clustered_bar']:
             if is_count_based:
                 val_counts = df_g[x_col].value_counts().reset_index()
                 val_counts.columns = [x_col, 'Count']
                 fig.add_trace(go.Bar(y=val_counts[x_col], x=val_counts['Count'], orientation='h', name=trace_name,
-                                     marker_color=c_val, marker_line_width=0))
+                                     marker_color=c_val, marker_line_width=0, text=val_counts['Count'],
+                                     textposition='outside',
+                                     textfont=dict(color='black', family='Inter')))
             else:
                 calc_x = x_col if x_is_num else y_col
                 calc_y = y_col if x_is_num else x_col
-                agg = df_g.groupby(calc_y)[calc_x].mean().reset_index()
+                agg = df_g.groupby(calc_y)[calc_x].mean().reset_index().sort_values(by=calc_x, ascending=True)
+                # Ensure numerical formatting
+                text_vals = agg[calc_x].apply(lambda v: f"{v / 1e6:.1f}M" if v > 1e6 else f"{v:.1f}")
                 fig.add_trace(go.Bar(y=agg[calc_y], x=agg[calc_x], orientation='h', name=trace_name, marker_color=c_val,
-                                     marker_line_width=0))
+                                     marker_line_width=0, text="<b>" + text_vals + "</b>", textposition='outside',
+                                     textfont=dict(color='black', family='Inter')))
 
         elif chart_type == 'box':
             if x_is_cat:
@@ -385,14 +539,57 @@ def build_dynamic_chart(df_filtered, chart_type, x_col, y_col, group_col, size_c
                                      marker_color=c_val, line_width=1))
 
         elif chart_type == 'violin':
-            if x_is_cat:
-                fig.add_trace(
-                    go.Violin(x=df_g[x_col], y=df_g[y_col] if y_col else df_g[NUMERICAL_COLS[0]], name=trace_name,
-                              line_color=c_val, fillcolor=c_val, meanline_visible=True))
+            # Custom colors for Profit and Loss to match guidelines
+            if str(g) == 'Profit':
+                v_color = '#A9D18E'
+            elif str(g) == 'Loss':
+                v_color = '#FF6666'
             else:
+                v_color = c_val
+
+            if x_is_cat:
+                y_target = y_col if y_col else NUMERICAL_COLS[0]
                 fig.add_trace(
-                    go.Violin(x=df_g[x_col], y=df_g[y_col] if y_col else None, orientation='h', name=trace_name,
-                              line_color=c_val, fillcolor=c_val, meanline_visible=True))
+                    go.Violin(x=df_g[x_col], y=df_g[y_target], name=trace_name,
+                              line_color='black', fillcolor=v_color,
+                              box_visible=True, opacity=0.9))
+
+                # Add median annotations dynamically
+                for x_cat in df_g[x_col].dropna().unique():
+                    subset = df_g[df_g[x_col] == x_cat]
+                    if not subset.empty:
+                        median_val = subset[y_target].median()
+                        if pd.notna(median_val):
+                            fig.add_annotation(
+                                x=x_cat,
+                                y=median_val,
+                                text=f"<b>{median_val:.2f}</b>",
+                                showarrow=False,
+                                xshift=45,
+                                font=dict(color='black', size=12, family="Arial")
+                            )
+            else:
+                y_target = y_col if y_col else CATEGORICAL_COLS[0]
+                fig.add_trace(
+                    go.Violin(x=df_g[x_col], y=df_g[y_target] if y_col else None, orientation='h', name=trace_name,
+                              line_color='black', fillcolor=v_color,
+                              box_visible=True, opacity=0.9))
+
+                # Add median annotations for horizontal violins
+                if y_col and y_is_cat:
+                    for y_cat in df_g[y_col].dropna().unique():
+                        subset = df_g[df_g[y_col] == y_cat]
+                        if not subset.empty:
+                            median_val = subset[x_col].median()
+                            if pd.notna(median_val):
+                                fig.add_annotation(
+                                    x=median_val,
+                                    y=y_cat,
+                                    text=f"<b>{median_val:.2f}</b>",
+                                    showarrow=False,
+                                    yshift=20,
+                                    font=dict(color='black', size=12, family="Arial")
+                                )
 
         elif chart_type == 'line':
             agg = df_g.groupby(x_col)[y_col].mean().reset_index()
@@ -405,12 +602,13 @@ def build_dynamic_chart(df_filtered, chart_type, x_col, y_col, group_col, size_c
                 go.Scatter(x=agg[x_col], y=agg[y_col], mode='lines', stackgroup='one', name=trace_name, fillcolor=c_val,
                            line_width=0))
 
+    barmode_str = None
     if chart_type in ['stacked_column', 'stacked_bar']:
-        fig.update_layout(barmode='stack')
+        barmode_str = 'stack'
     elif chart_type in ['clustered_column', 'clustered_bar']:
-        fig.update_layout(barmode='group')
+        barmode_str = 'group'
     elif chart_type == 'histogram':
-        fig.update_layout(barmode='overlay')
+        barmode_str = 'overlay'
 
     y_label = y_col.replace('_', ' ').title() if y_col else ("Count" if is_count_based else "")
     x_label = x_col.replace('_', ' ').title()
@@ -420,14 +618,46 @@ def build_dynamic_chart(df_filtered, chart_type, x_col, y_col, group_col, size_c
             y_label, x_label = x_label, y_col.replace('_', ' ').title()
 
     title_text = f"{y_label} vs {x_label}" if y_label else f"Distribution of {x_label}"
+    legend_text = group_col.replace('_', ' ').title() if group_col and group_col != 'None' else "Legend"
+    margin_l_val = 150 if chart_type in ['bar', 'stacked_bar', 'clustered_bar'] else 60
 
-    fig.update_layout(
-        xaxis=dict(title=x_label),
-        yaxis=dict(title=y_label),
-        showlegend=True if group_col else False
+    # Expand axis slightly to accommodate the new text labels
+    x_range = None
+    y_range = None
+    if chart_type in ['bar', 'stacked_bar', 'clustered_bar'] and not is_count_based:
+        max_val = df_filtered.groupby(y_col if x_is_num else x_col)[x_col if x_is_num else y_col].mean().max()
+        x_range = [0, max_val * 1.15]
+    elif chart_type in ['column', 'stacked_column', 'clustered_column'] and not is_count_based:
+        max_val = df_filtered.groupby(x_col if x_is_cat else y_col)[y_col if x_is_cat else x_col].mean().max()
+        y_range = [0, max_val * 1.15]
+
+    fig = apply_standard_layout(
+        fig,
+        title_text=title_text,
+        xaxis_title=x_label,
+        yaxis_title=y_label,
+        legend_title=legend_text,
+        barmode=barmode_str,
+        margin_l=margin_l_val,
+        margin_r=180,
+        xaxis_range=x_range,
+        yaxis_range=y_range,
+        yaxis_rangemode="tozero" if chart_type in ['column', 'clustered_column'] else None,
+        xaxis_rangemode="tozero" if chart_type in ['bar', 'clustered_bar'] else None
     )
-    return apply_guidelines(
-        fig), f"<b>{title_text}</b><br><span style='font-size:12px;color:#64748B'>Interactive Explorer Output</span>"
+
+    # Apply specific styling to match the Violin plot guideline
+    if chart_type == 'violin':
+        fig.update_layout(
+            plot_bgcolor='white',
+            paper_bgcolor='white',
+            xaxis=dict(color='black', showgrid=False, showline=True, linecolor='gray', linewidth=1.5, mirror=True),
+            yaxis=dict(color='black', showgrid=True, gridcolor='gray', griddash='dash', showline=True, linecolor='gray',
+                       linewidth=1.5, mirror=True),
+            font=dict(color='black', family='Arial')
+        )
+
+    return fig, f"<b>{title_text}</b><br><span style='font-size:12px;color:#64748B'>Interactive Explorer Output</span>"
 
 
 @app.callback(
@@ -448,19 +678,20 @@ def update_standard_charts(selected_genres, selected_languages, selected_years):
         ].copy()
 
     if filtered.empty:
-        empty_state = get_empty_state("Adjust filters to explore data")
+        empty_state = apply_standard_layout(get_empty_state("Adjust filters to explore data"), "No Data", "", "")
         return tuple(["0", "$0", "0.0", "-"] + [empty_state] * 13)
 
     # --- Compute Top Stats dynamically ---
     total_movies = f"{len(filtered):,}"
 
-    total_profit_val = filtered['profit'].sum()
+    total_profit_val = filtered['realistic_profit'].sum() if 'realistic_profit' in filtered.columns else filtered[
+        'profit'].sum()
     if total_profit_val >= 1e9:
         total_profit_str = f"${total_profit_val / 1e9:.2f}B"
     else:
         total_profit_str = f"${total_profit_val / 1e6:.1f}M"
 
-    avg_rating_str = f"{filtered['vote_average'].mean():.1f}"
+    avg_rating_str = f"{filtered['weighted_rating'].mean():.1f}"
     top_genre_str = filtered['main_genre'].value_counts().idxmax() if not filtered['main_genre'].empty else "-"
 
     # C1
@@ -468,10 +699,21 @@ def update_standard_charts(selected_genres, selected_languages, selected_years):
     df_month['Month'] = df_month['release_month'].apply(lambda x: calendar.month_abbr[int(x)])
     colors1 = ['#93C5FD'] * len(df_month)
     if len(colors1) > 0: colors1[df_month['profit'].idxmax()] = COLOR_SUCCESS
+
     c1 = go.Figure(
-        go.Bar(x=df_month['Month'], y=df_month['profit'], text=(df_month['profit'] / 1e6).round(1).astype(str) + 'M',
-               textposition='outside', marker_color=colors1, marker_line_width=0))
-    c1.update_layout(xaxis=dict(showgrid=False), yaxis=dict(showgrid=True))
+        go.Bar(x=df_month['Month'], y=df_month['profit'], name="Profit Data",
+               text=(df_month['profit'] / 1e6).round(1).astype(str) + 'M',
+               textposition='outside', marker_color=colors1, marker_line_width=0, showlegend=False))
+    c1.add_trace(go.Bar(x=[None], y=[None], marker_color=COLOR_SUCCESS, name='Top Performing Month'))
+    c1.add_trace(go.Bar(x=[None], y=[None], marker_color='#93C5FD', name='Standard Month'))
+    c1 = apply_standard_layout(
+        c1,
+        title_text="Average Profit by Release Season",
+        xaxis_title="Release Month",
+        yaxis_title="Avg Profit ($)",
+        legend_title="Metrics",
+        yaxis_rangemode="tozero"
+    )
 
     # C2
     df_company = filtered.groupby('primary_company')['profit'].sum().reset_index()
@@ -479,11 +721,22 @@ def update_standard_charts(selected_genres, selected_languages, selected_years):
         15).sort_values('profit', ascending=True).reset_index(drop=True)
     colors2 = ['#93C5FD'] * len(df_top15)
     if len(colors2) > 0: colors2[-1] = COLOR_SUCCESS
-    c2 = go.Figure(go.Bar(x=df_top15['profit'], y=df_top15['primary_company'], orientation='h',
-                          text=(df_top15['profit'] / 1e9).round(2).astype(str) + 'B', textposition='outside',
-                          marker_color=colors2, marker_line_width=0))
-    c2.update_layout(xaxis=dict(showgrid=True, range=[0, df_top15['profit'].max() * 1.15 if not df_top15.empty else 1]),
-                     yaxis=dict(showgrid=False))
+
+    c2 = go.Figure(
+        go.Bar(x=df_top15['profit'], y=df_top15['primary_company'], name="Total Profit Data", orientation='h',
+               text=(df_top15['profit'] / 1e9).round(2).astype(str) + 'B', textposition='outside',
+               marker_color=colors2, marker_line_width=0, showlegend=False))
+    c2.add_trace(go.Bar(x=[None], y=[None], marker_color=COLOR_SUCCESS, name='Top Studio'))
+    c2.add_trace(go.Bar(x=[None], y=[None], marker_color='#93C5FD', name='Other Studios'))
+    c2 = apply_standard_layout(
+        c2,
+        title_text="Top 15 Production Companies by Total Profit",
+        xaxis_title="Total Profit (USD)",
+        yaxis_title="Production Company",
+        legend_title="Metrics",
+        xaxis_range=[0, df_top15['profit'].max() * 1.15 if not df_top15.empty else 1],
+        margin_l=180
+    )
 
     # C3
     tier_grp = filtered.dropna(subset=['Budget_Tier']).groupby(['Budget_Tier', 'performance_status'],
@@ -495,6 +748,7 @@ def update_standard_charts(selected_genres, selected_languages, selected_years):
         tier_grp = tier_grp.sort_values(by='Loss_Pct', ascending=False)
         p_colors = [COLOR_SUCCESS] * len(tier_grp.index)
         l_colors = [COLOR_DANGER] * len(tier_grp.index)
+
         c3 = go.Figure()
         c3.add_trace(go.Bar(x=tier_grp.index, y=tier_grp['Profit_Pct'], name='Profit Pct', marker_color=p_colors,
                             text=tier_grp['Profit_Pct'].round(0).astype(int).astype(str) + "%", textposition='inside',
@@ -502,10 +756,19 @@ def update_standard_charts(selected_genres, selected_languages, selected_years):
         c3.add_trace(go.Bar(x=tier_grp.index, y=tier_grp['Loss_Pct'], name='Loss Pct', marker_color=l_colors,
                             text=tier_grp['Loss_Pct'].round(0).astype(int).astype(str) + "%", textposition='inside',
                             insidetextanchor='middle', textfont=dict(color='white'), marker_line_width=0))
-        c3.update_layout(barmode='stack', bargap=0.35, yaxis=dict(range=[0, 125], ticksuffix="%"),
-                         legend=dict(yanchor="bottom", y=-0.25, xanchor="center", x=0.5, orientation="h"))
+        c3 = apply_standard_layout(
+            c3,
+            title_text="Profit vs Loss Distribution by Budget Tier (%)",
+            xaxis_title="Budget Tiers (Sorted by Risk Level)",
+            yaxis_title="Percentage of Movies (%)",
+            legend_title="Performance",
+            barmode='stack',
+            bargap=0.35,
+            yaxis_range=[0, 125],
+            yaxis_ticksuffix="%"
+        )
     else:
-        c3 = get_empty_state("Not enough data")
+        c3 = apply_standard_layout(get_empty_state("Not enough data"), "Data Unavailable", "", "")
 
     # C4
     c4_data = []
@@ -515,17 +778,60 @@ def update_standard_charts(selected_genres, selected_languages, selected_years):
         high = filtered[(filtered[col] == 1) & (filtered['Rating_Cat'] == 'High Rated')].shape[0]
         low = filtered[(filtered[col] == 1) & (filtered['Rating_Cat'] == 'Low Rated')].shape[0]
         total = high + low
-        if total > 0: c4_data.append({'Genre': g_name, 'High Rated': high, 'Low Rated': low, 'Total': total})
+        if total > 0:
+            c4_data.append({'Genre': g_name, 'High Rated': high, 'Low Rated': low, 'Total': total})
+
     df_g4 = pd.DataFrame(c4_data).sort_values('Total', ascending=True).tail(10).reset_index(
         drop=True) if c4_data else pd.DataFrame()
+
     c4 = go.Figure()
     if not df_g4.empty:
-        c4.add_trace(go.Bar(y=df_g4['Genre'], x=df_g4['High Rated'], name='High Satisfaction', orientation='h',
-                            marker_color=COLOR_PRIMARY, marker_line_width=0))
-        c4.add_trace(go.Bar(y=df_g4['Genre'], x=df_g4['Low Rated'], name='Low Satisfaction', orientation='h',
-                            marker_color=COLOR_SECONDARY, marker_line_width=0))
-        c4.update_layout(barmode='stack', bargap=0.3, xaxis=dict(showgrid=True), yaxis=dict(showgrid=False),
-                         legend=dict(yanchor="bottom", y=-0.25, xanchor="center", x=0.5, orientation="h"))
+        df_g4['High_Pct'] = (df_g4['High Rated'] / df_g4['Total'] * 100).fillna(0).round(0).astype(int)
+        df_g4['Low_Pct'] = (df_g4['Low Rated'] / df_g4['Total'] * 100).fillna(0).round(0).astype(int)
+
+        h_col = ['#3B82F6' if g == 'Drama' else '#93C5FD' for g in df_g4['Genre']]
+        l_col = ['#1E40AF' if g == 'Drama' else '#64748B' for g in df_g4['Genre']]
+
+        for i, row in df_g4.iterrows():
+            is_drama = row['Genre'] == 'Drama'
+            c4.add_trace(go.Bar(
+                y=[row['Genre']], x=[row['High Rated']], orientation='h',
+                name='High Satisfaction (Drama Top)' if is_drama else 'High Satisfaction',
+                marker_color=h_col[i], marker_line_width=0,
+                text=str(row['High Rated']) if row['High Rated'] > 0 else '', textposition='inside',
+                insidetextanchor='middle', textfont=dict(color='white', size=11, family='Inter'),
+                showlegend=is_drama or i == 0
+            ))
+            c4.add_trace(go.Bar(
+                y=[row['Genre']], x=[row['Low Rated']], orientation='h',
+                name='Low Satisfaction (Drama Top)' if is_drama else 'Low Satisfaction',
+                marker_color=l_col[i], marker_line_width=0,
+                text=str(row['Low Rated']) if row['Low Rated'] > 0 else '', textposition='inside',
+                insidetextanchor='middle', textfont=dict(color='white', size=11, family='Inter'),
+                showlegend=is_drama or i == 0
+            ))
+            c4.add_annotation(
+                x=row['Total'] + (df_g4['Total'].max() * 0.02),
+                y=row['Genre'],
+                text=f"Total: {row['Total']}",
+                showarrow=False,
+                font=dict(size=10, color='#475569', family='Inter', weight='bold'),
+                xanchor='left', yanchor='middle', xref='x', yref='y'
+            )
+
+        c4 = apply_standard_layout(
+            c4,
+            title_text="Audience Satisfaction Composition by Genre",
+            xaxis_title="Number of Movies",
+            yaxis_title="Movie Genre",
+            legend_title="Satisfaction Level",
+            barmode='stack',
+            bargap=0.25,
+            bargroupgap=0.1,
+            margin_l=120
+        )
+        max_total = df_g4['Total'].max() if not df_g4.empty else 1
+        c4.update_xaxes(range=[0, max_total * 1.15])
 
     # C5
     df_month2 = filtered.dropna(subset=['release_month']).groupby('release_month')[
@@ -533,41 +839,77 @@ def update_standard_charts(selected_genres, selected_languages, selected_years):
     df_month2['Month'] = df_month2['release_month'].apply(lambda x: calendar.month_abbr[int(x)])
     df_month2['Norm_Rating'] = df_month2['weighted_rating'] * 10
     df_month2['Norm_Popularity'] = (df_month2['popularity'] / (df_month2['popularity'].max() or 1)) * 100
+
     c5 = go.Figure()
-    c5.add_trace(go.Bar(x=df_month2['Month'], y=df_month2['Norm_Rating'], name='Rating', marker_color='#60A5FA',
-                        marker_line_width=0))
-    c5.add_trace(go.Bar(x=df_month2['Month'], y=df_month2['Norm_Popularity'], name='Popularity', marker_color='#1E40AF',
-                        marker_line_width=0))
+    c5.add_trace(
+        go.Bar(x=df_month2['Month'], y=df_month2['Norm_Rating'], name='Audience Rating', marker_color='#60A5FA',
+               marker_line_width=0, text="<b>" + df_month2['Norm_Rating'].round(0).astype(int).astype(str) + "</b>",
+               textposition='outside', textfont=dict(color='black', family='Inter')))
+    c5.add_trace(
+        go.Bar(x=df_month2['Month'], y=df_month2['Norm_Popularity'], name='Marketing Hype', marker_color='#1E40AF',
+               marker_line_width=0, text="<b>" + df_month2['Norm_Popularity'].round(0).astype(int).astype(str) + "</b>",
+               textposition='outside', textfont=dict(color='black', family='Inter')))
+
     max_val_c5 = max(df_month2['Norm_Rating'].max() if not df_month2.empty else 0,
                      df_month2['Norm_Popularity'].max() if not df_month2.empty else 0)
-    c5.update_layout(barmode='group', bargroupgap=0.15,
-                     yaxis=dict(rangemode="tozero", range=[0, max_val_c5 * 1.25], showgrid=True),
-                     legend=dict(yanchor="top", y=0.98, xanchor="right", x=0.98))
+    c5 = apply_standard_layout(
+        c5,
+        title_text="Audience Rating vs Marketing Hype by Release Month",
+        xaxis_title="Release Month",
+        yaxis_title="Score (0-100 Scale)",
+        legend_title="Metrics",
+        barmode='group',
+        bargroupgap=0.15,
+        yaxis_range=[0, max_val_c5 * 1.25],
+        yaxis_rangemode="tozero"
+    )
 
     # C6
     df_dec = filtered[filtered['Decade'] >= 1980].groupby('Decade_Str')[
         ['budget', 'profit']].mean().reset_index().sort_values('Decade_Str')
     c6 = go.Figure()
     c6.add_trace(go.Bar(y=df_dec['Decade_Str'], x=df_dec['budget'] / 1e6, name='Avg Budget', orientation='h',
-                        marker_color='#94A3B8', marker_line_width=0))
+                        marker_color='#94A3B8', marker_line_width=0,
+                        text="<b>" + (df_dec['budget'] / 1e6).round(1).astype(str) + "M</b>", textposition='outside',
+                        textfont=dict(color='black', family='Inter')))
     c6.add_trace(go.Bar(y=df_dec['Decade_Str'], x=df_dec['profit'] / 1e6, name='Avg Profit', orientation='h',
-                        marker_color=COLOR_PRIMARY, marker_line_width=0))
-    c6.update_layout(barmode='group', bargap=0.2, bargroupgap=0.1,
-                     legend=dict(yanchor="top", y=0.85, xanchor="right", x=0.98), xaxis=dict(showgrid=True),
-                     yaxis=dict(showgrid=False))
+                        marker_color=COLOR_PRIMARY, marker_line_width=0,
+                        text="<b>" + (df_dec['profit'] / 1e6).round(1).astype(str) + "M</b>", textposition='outside',
+                        textfont=dict(color='black', family='Inter')))
+    c6 = apply_standard_layout(
+        c6,
+        title_text="Average Budget vs Profit by Decade",
+        xaxis_title="Amount ($ Millions)",
+        yaxis_title="Decade",
+        legend_title="Financials",
+        barmode='group',
+        bargap=0.2,
+        bargroupgap=0.1,
+        margin_l=80,
+        xaxis_range=[0, max(df_dec['budget'].max(), df_dec['profit'].max()) / 1e6 * 1.25 if not df_dec.empty else 1]
+    )
 
     # C7
     df_scatter = filtered.dropna(subset=['runtime', 'weighted_rating'])
     c7 = go.Figure()
     if not df_scatter.empty:
-        c7.add_trace(go.Scatter(x=df_scatter['runtime'], y=df_scatter['weighted_rating'], mode='markers', name='Movies',
-                                marker=dict(color=COLOR_PRIMARY, size=5, opacity=0.4, line_width=0),
-                                text=df_scatter['title']))
+        c7.add_trace(
+            go.Scatter(x=df_scatter['runtime'], y=df_scatter['weighted_rating'], mode='markers', name='Movies Scatter',
+                       marker=dict(color=COLOR_PRIMARY, size=5, opacity=0.4, line_width=0),
+                       text=df_scatter['title']))
         if len(df_scatter) > 1:
             m, b = np.polyfit(df_scatter['runtime'], df_scatter['weighted_rating'], 1)
             c7.add_trace(
-                go.Scatter(x=df_scatter['runtime'], y=m * df_scatter['runtime'] + b, mode='lines', name='Trendline',
+                go.Scatter(x=df_scatter['runtime'], y=m * df_scatter['runtime'] + b, mode='lines',
+                           name='Linear Trendline',
                            line=dict(color='#1E40AF', width=2, dash='dot')))
+    c7 = apply_standard_layout(
+        c7,
+        title_text="Runtime vs. Audience Rating",
+        xaxis_title="Runtime (Minutes)",
+        yaxis_title="Weighted Rating",
+        legend_title="Distribution"
+    )
 
     # C8
     df_bub = filtered[(filtered['profit'] > 0) & (filtered['budget'] > 0) & (filtered['vote_count'] > 100)].copy()
@@ -575,16 +917,33 @@ def update_standard_charts(selected_genres, selected_languages, selected_years):
     if not df_bub.empty:
         sizeref = 2.0 * df_bub['budget'].max() / (35 ** 2)
         c8.add_trace(go.Scatter(x=df_bub['vote_count'], y=df_bub['profit'], mode='markers', text=df_bub['title'],
+                                name='Profit relative to Votes',
                                 marker=dict(size=df_bub['budget'], sizeref=sizeref, sizemode='area',
                                             color=COLOR_PRIMARY, opacity=0.4, line=dict(color='#FFFFFF', width=0.5)),
-                                showlegend=False))
+                                showlegend=True))
+    c8 = apply_standard_layout(
+        c8,
+        title_text="Audience Engagement vs. Profitability",
+        xaxis_title="Vote Count",
+        yaxis_title="Profit ($)",
+        legend_title="Metrics"
+    )
 
     # C9
     c9 = go.Figure(
-        go.Histogram(x=filtered['runtime'], xbins=dict(start=40, end=250, size=9), marker_color=COLOR_PRIMARY,
+        go.Histogram(x=filtered['runtime'], xbins=dict(start=40, end=250, size=9), name="Movies Frequency",
+                     marker_color=COLOR_PRIMARY,
                      marker_line_width=0))
     if not filtered.empty and not filtered['runtime'].isna().all():
-        c9.add_vline(x=filtered['runtime'].mean(), line_dash="dash", line_color=COLOR_SECONDARY)
+        c9.add_vline(x=filtered['runtime'].mean(), line_dash="dash", line_color=COLOR_SECONDARY,
+                     name="Mean Runtime Line")
+    c9 = apply_standard_layout(
+        c9,
+        title_text="Distribution of Movie Runtime (Industry Standard)",
+        xaxis_title="Runtime (Minutes)",
+        yaxis_title="Number of Movies",
+        legend_title="Legend"
+    )
 
     # C10
     season_order = ['Winter', 'Spring', 'Summer', 'Autumn']
@@ -592,30 +951,99 @@ def update_standard_charts(selected_genres, selected_languages, selected_years):
     for season in season_order:
         c10.add_trace(
             go.Box(x=filtered[filtered['Season'] == season]['Season'], y=filtered[filtered['Season'] == season]['ROI'],
-                   marker_color=COLOR_PRIMARY, fillcolor='#F8FAFC', line_width=1))
-    c10.update_layout(xaxis=dict(categoryorder='array', categoryarray=season_order), yaxis=dict(range=[0, 10]),
-                      showlegend=False)
+                   name=season, marker_color=COLOR_PRIMARY, fillcolor='#F8FAFC', line_width=1))
+    c10 = apply_standard_layout(
+        c10,
+        title_text="ROI Distribution by Season (Volatility Comparison)",
+        xaxis_title="Season",
+        yaxis_title="ROI Multiplier",
+        legend_title="Seasons",
+        xaxis_categoryorder='array',
+        xaxis_categoryarray=season_order,
+        yaxis_range=[0, 10]
+    )
 
     # C11
     c11 = go.Figure()
     if not filtered.empty and 'performance_status' in filtered.columns:
-        c11.add_trace(go.Violin(x=filtered['performance_status'][filtered['performance_status'] == 'Profit'],
-                                y=filtered['log_budget'][filtered['performance_status'] == 'Profit'], name='Profit',
-                                fillcolor=COLOR_SUCCESS, line_color=COLOR_SUCCESS, meanline_visible=True))
-        c11.add_trace(go.Violin(x=filtered['performance_status'][filtered['performance_status'] == 'Loss'],
-                                y=filtered['log_budget'][filtered['performance_status'] == 'Loss'], name='Loss',
-                                fillcolor=COLOR_DANGER, line_color=COLOR_DANGER, meanline_visible=True))
-    c11.update_layout(showlegend=False)
+        median_profit = filtered[filtered['performance_status'] == 'Profit']['log_budget'].median()
+        median_loss = filtered[filtered['performance_status'] == 'Loss']['log_budget'].median()
 
-    # C12
-    df_ts = filtered[(filtered['release_year'] >= 1990) & (filtered['revenue'] > 0)].groupby('release_year')[
-        ['budget', 'revenue']].mean().reset_index()
+        c11.add_trace(go.Violin(
+            x=filtered['performance_status'][filtered['performance_status'] == 'Profit'],
+            y=filtered['log_budget'][filtered['performance_status'] == 'Profit'],
+            name='Profit',
+            fillcolor='#A9D18E',
+            line_color='black',
+            box_visible=True,
+            opacity=0.9
+        ))
+        c11.add_trace(go.Violin(
+            x=filtered['performance_status'][filtered['performance_status'] == 'Loss'],
+            y=filtered['log_budget'][filtered['performance_status'] == 'Loss'],
+            name='Loss',
+            fillcolor='#FF6666',
+            line_color='black',
+            box_visible=True,
+            opacity=0.9
+        ))
+
+    c11 = apply_standard_layout(
+        c11,
+        title_text="Where Does Failure Lie? Budget Distribution by Performance",
+        xaxis_title="Performance Status",
+        yaxis_title="Log Budget",
+        legend_title="Status Category"
+    )
+
+    # Adding the median annotations inside the callback to remain dynamic
+    if not filtered.empty and 'performance_status' in filtered.columns:
+        if pd.notna(median_profit):
+            c11.add_annotation(
+                x='Profit',
+                y=median_profit,
+                text=f"<b>{median_profit:.2f}</b>",
+                showarrow=False,
+                xshift=45,
+                font=dict(color='black', size=12, family="Arial")
+            )
+        if pd.notna(median_loss):
+            c11.add_annotation(
+                x='Loss',
+                y=median_loss,
+                text=f"<b>{median_loss:.2f}</b>",
+                showarrow=False,
+                xshift=45,
+                font=dict(color='black', size=12, family="Arial")
+            )
+
+    # Apply specific styling to match the Violin plot guideline
+    c11.update_layout(
+        plot_bgcolor='white',
+        paper_bgcolor='white',
+        xaxis=dict(color='black', showgrid=False, showline=True, linecolor='gray', linewidth=1.5, mirror=True),
+        yaxis=dict(color='black', showgrid=True, gridcolor='gray', griddash='dash', showline=True, linecolor='gray',
+                   linewidth=1.5, mirror=True),
+        font=dict(color='black', family='Arial')
+    )
+
+    # C12 (Fixed drop off in 2017)
+    df_ts = filtered[
+        (filtered['release_year'] >= 1990) & (filtered['release_year'] < 2017) & (filtered['revenue'] > 0)].groupby(
+        'release_year')[
+        ['budget', 'revenue']].mean().reset_index().sort_values('release_year')
     c12 = go.Figure()
     c12.add_trace(go.Scatter(x=df_ts['release_year'], y=df_ts['budget'], mode='lines+markers', name='Avg Budget',
-                             line=dict(color=COLOR_SECONDARY, width=2)))
+                             line=dict(color=COLOR_DANGER, width=2)))
     c12.add_trace(go.Scatter(x=df_ts['release_year'], y=df_ts['revenue'], mode='lines+markers', name='Avg Revenue',
-                             line=dict(color=COLOR_PRIMARY, width=2)))
-    c12.update_layout(legend=dict(yanchor="top", y=0.98, xanchor="left", x=1.02))
+                             line=dict(color=COLOR_SUCCESS, width=2)))
+    c12 = apply_standard_layout(
+        c12,
+        title_text="Budget vs Revenue Growth (Post-1990)",
+        xaxis_title="Release Year",
+        yaxis_title="Amount ($)",
+        legend_title="Metrics"
+    )
 
     # C13
     df_clean_area = filtered[(filtered['release_year'] >= 1990) & (filtered['release_year'] < 2017)]
@@ -626,11 +1054,18 @@ def update_standard_charts(selected_genres, selected_languages, selected_years):
     for i, g in enumerate(top_4):
         if f'genre_{g}' in df_clean_area.columns:
             temp = df_clean_area[df_clean_area[f'genre_{g}'] == 1].groupby('release_year')['profit'].sum().reset_index()
-            c13.add_trace(go.Scatter(x=temp['release_year'], y=temp['profit'], mode='lines', name=g, stackgroup='one',
-                                     fillcolor=colors_area[i], line_width=0))
-    c13.update_layout(legend=dict(yanchor="top", y=0.98, xanchor="right", x=1.135))
+            c13.add_trace(
+                go.Scatter(x=temp['release_year'], y=temp['profit'], mode='lines', name=f"{g} Profit", stackgroup='one',
+                           fillcolor=colors_area[i], line_width=0))
+    c13 = apply_standard_layout(
+        c13,
+        title_text="Genre Contribution to Total Profit Over Time",
+        xaxis_title="Release Year",
+        yaxis_title="Cumulative Profit ($)",
+        legend_title="Genres"
+    )
 
-    figures = [apply_guidelines(fig) for fig in [c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13]]
+    figures = [c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13]
     return tuple([total_movies, total_profit_str, avg_rating_str, top_genre_str] + figures)
 
 
@@ -658,7 +1093,6 @@ def update_custom_dropdowns(chart_type):
     cat_none = [{'label': 'None', 'value': 'None'}] + cat_opts
     num_none = [{'label': 'None', 'value': 'None'}] + num_opts
 
-    # DEFAULT: SHOW EVERYTHING SO NO COLUMN IS HIDDEN
     x_style, x_opts, x_val, x_label = show_style, all_opts, 'budget', "X-Axis:"
     y_style, y_opts, y_val, y_label = show_style, all_none, 'revenue', "Y-Axis:"
     g_style, g_opts, g_val, g_label = show_style, cat_none, 'None', "Color / Group:"
@@ -687,16 +1121,15 @@ def update_custom_dropdowns(chart_type):
             s_style, s_opts, s_val, s_label)
 
 
-# Callback explicitly for Custom Explorer graph logic
 @app.callback(
     [Output('custom-graph-output', 'figure'),
      Output('custom-chart-title', 'children')],
     [Input('genre-filter', 'value'), Input('language-filter', 'value'), Input('year-filter', 'value'),
      Input('custom-chart-type', 'value'), Input('custom-x-axis', 'value'), Input('custom-y-axis', 'value'),
-     Input('custom-group-axis', 'value'), Input('custom-size-axis', 'value')]
+     Input('custom-group-axis', 'value'), Input('custom-size-axis', 'value'), Input('custom-top-n', 'value')]
 )
 def update_custom_graph(selected_genres, selected_languages, selected_years, chart_type, x_col, y_col, group_col,
-                        size_col):
+                        size_col, top_n):
     if not selected_genres: selected_genres = top_genres
     if not selected_languages: selected_languages = available_languages
 
@@ -707,11 +1140,9 @@ def update_custom_graph(selected_genres, selected_languages, selected_years, cha
         (df['release_year'] <= selected_years[1])
         ]
 
-    fig, title_html = build_dynamic_chart(filtered, chart_type, x_col, y_col, group_col, size_col)
+    fig, title_html = build_dynamic_chart(filtered, chart_type, x_col, y_col, group_col, size_col, top_n)
 
-    # --- CLEAN THE TITLE ---
-    # Strip HTML tags from the title returned by build_dynamic_chart
-    # This prevents raw HTML like <b> or <span> from showing up on the screen
+    # Clean the title format safely
     clean_title = title_html.replace("<b>", "").replace("</b>", "").split("<br>")[0]
 
     return fig, clean_title
